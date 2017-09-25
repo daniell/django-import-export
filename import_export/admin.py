@@ -45,7 +45,9 @@ except ImportError:
 SKIP_ADMIN_LOG = getattr(settings, 'IMPORT_EXPORT_SKIP_ADMIN_LOG', False)
 TMP_STORAGE_CLASS = getattr(settings, 'IMPORT_EXPORT_TMP_STORAGE_CLASS',
                             TempFolderStorage)
-EXPORT_USING_CELERY_LEVEL = getattr(settings, 'IMPORT_EXPORT_EXPORT_USING_CELERY_LEVEL', 1000)
+USE_CELERY = getattr(settings, 'IMPORT_EXPORT_USE_CELERY', False)
+EXPORT_USING_CELERY_LEVEL = getattr(settings, 'IMPORT_EXPORT_EXPORT_USING_CELERY_LEVEL', 0)
+
 
 if isinstance(TMP_STORAGE_CLASS, six.string_types):
     try:
@@ -72,12 +74,14 @@ DEFAULT_FORMATS = (
 )
 
 
-def celery_is_available():
+def celery_is_present():
     try:
-        from celery import Celery
-        return True
+        import celery
+        result = True
     except ImportError:
-        return False
+        result = False
+
+    return result
 
 
 class ImportExportMixinBase(object):
@@ -134,11 +138,11 @@ class ImportMixin(ImportExportMixinBase):
         ]
         return my_urls + urls
 
-    def get_resource_kwargs(self, *args, **kwargs):
+    def get_resource_kwargs(self, request, *args, **kwargs):
         return {}
 
-    def get_import_resource_kwargs(self, *args, **kwargs):
-        return self.get_resource_kwargs(*args, **kwargs)
+    def get_import_resource_kwargs(self, request, *args, **kwargs):
+        return self.get_resource_kwargs(request, *args, **kwargs)
 
     def get_resource_class(self):
         if not self.resource_class:
@@ -418,7 +422,7 @@ class ExportMixin(ImportExportMixinBase):
         resource_class = self.get_export_resource_class()
         resource_kwargs = self.get_export_resource_kwargs(request)
 
-        if queryset.count() > EXPORT_USING_CELERY_LEVEL:
+        if celery_is_present() and USE_CELERY and queryset.count() > EXPORT_USING_CELERY_LEVEL:
             file_format_name = unicode(file_format.__name__)
             model_name = self.get_model_info()[1]
             model_name = model_name.capitalize()
