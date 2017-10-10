@@ -3,8 +3,6 @@ from __future__ import with_statement
 from datetime import datetime
 import importlib
 import pickle
-
-import django
 from django.contrib import admin
 from django.utils import six
 from django.utils.translation import ugettext_lazy as _
@@ -49,7 +47,6 @@ TMP_STORAGE_CLASS = getattr(settings, 'IMPORT_EXPORT_TMP_STORAGE_CLASS',
 USE_CELERY = getattr(settings, 'IMPORT_EXPORT_USE_CELERY', False)
 EXPORT_USING_CELERY_LEVEL = getattr(settings, 'IMPORT_EXPORT_EXPORT_USING_CELERY_LEVEL', 0)
 
-
 if isinstance(TMP_STORAGE_CLASS, six.string_types):
     try:
         # Nod to tastypie's use of importlib.
@@ -61,8 +58,8 @@ if isinstance(TMP_STORAGE_CLASS, six.string_types):
         msg = "Could not import '%s' for import_export setting 'IMPORT_EXPORT_TMP_STORAGE_CLASS'" % TMP_STORAGE_CLASS
         raise ImportError(msg)
 
-# : These are the default formats for import and export. Whether they can be
-# : used or not is depending on their implementation in the tablib library.
+#: These are the default formats for import and export. Whether they can be
+#: used or not is depending on their implementation in the tablib library.
 DEFAULT_FORMATS = (
     base_formats.CSV,
     base_formats.XLS,
@@ -303,10 +300,7 @@ class ImportMixin(ImportExportMixinBase):
                     'input_format': form.cleaned_data['input_format'],
                 })
 
-        if django.VERSION >= (1, 8, 0):
-            context.update(self.admin_site.each_context(request))
-        elif django.VERSION >= (1, 7, 0):
-            context.update(self.admin_site.each_context())
+        context.update(self.admin_site.each_context(request))
 
         context['title'] = _("Import")
         context['form'] = form
@@ -328,7 +322,7 @@ class ExportMixin(ImportExportMixinBase):
     change_list_template = 'admin/import_export/change_list_export.html'
     #: template for export view
     export_template_name = 'admin/import_export/export.html'
-    # : available export formats
+    #: available export formats
     formats = DEFAULT_FORMATS
     #: export data encoding
     to_encoding = "utf-8"
@@ -342,11 +336,11 @@ class ExportMixin(ImportExportMixinBase):
         ]
         return my_urls + urls
 
-    def get_resource_kwargs(self, *args, **kwargs):
+    def get_resource_kwargs(self, request, *args, **kwargs):
         return {}
 
-    def get_export_resource_kwargs(self, *args, **kwargs):
-        return self.get_resource_kwargs(*args, **kwargs)
+    def get_export_resource_kwargs(self, request, *args, **kwargs):
+        return self.get_resource_kwargs(request, *args, **kwargs)
 
     def get_resource_class(self):
         if not self.resource_class:
@@ -397,16 +391,6 @@ class ExportMixin(ImportExportMixinBase):
         """
         Returns file_format representation for given queryset.
         """
-        request = kwargs.pop("request", None)
-        resource_class = self.get_export_resource_class()
-        data = resource_class(**self.get_export_resource_kwargs(request)).export(queryset, *args, **kwargs)
-        export_data = file_format.export_data(data)
-        return export_data
-
-    def get_export_data(self, file_format, queryset, *args, **kwargs):
-        """
-        Returns file_format representation for given queryset.
-        """
         request = kwargs.pop("request")
         resource_class = self.get_export_resource_class()
         data = resource_class(**self.get_export_resource_kwargs(request)).export(queryset, *args, **kwargs)
@@ -419,28 +403,25 @@ class ExportMixin(ImportExportMixinBase):
     def get_context_data(self, **kwargs):
         return {}
 
-    def handle_export(self, file_format, queryset, request=None):
-        resource_class = self.get_export_resource_class()
-        resource_kwargs = self.get_export_resource_kwargs(request)
+    def handle_export(self, file_format, queryset, *args, **kwargs):
+        request = kwargs.get("request")
 
         if celery_is_present() and USE_CELERY and queryset.count() > EXPORT_USING_CELERY_LEVEL:
-            file_format_name = unicode(file_format.__name__)
+            file_format_name = str(file_format.__name__)
             model_name = self.get_model_info()[1]
             model_name = model_name.capitalize()
             subject_line = model_name + str(_(' Data Export'))
 
-            resource_class_import_path = '{0}.{1}'.format(resource_class.__module__, resource_class.__name__)
+            resource_class = self.get_export_resource_class()
+            resource_kwargs = self.get_export_resource_kwargs(request)
+            resource_class_import_path = '%s.%s' % (resource_class.__module__, resource_class.__name__)
 
             result = export_data.delay(file_format_name, pickle.dumps(queryset.query), resource_class_import_path, resource_kwargs, request.user.id, subject_line)
         else:
             file_format_instance = file_format()
             exported_data = self.get_export_data(file_format_instance, queryset, request=request)
             content_type = file_format_instance.get_content_type()
-            # Django 1.7 uses the content_type kwarg instead of mimetype
-            try:
-                result = HttpResponse(exported_data, content_type=content_type)
-            except TypeError:
-                result = HttpResponse(exported_data, mimetype=content_type)
+            result = HttpResponse(exported_data, content_type=content_type)
             result['Content-Disposition'] = 'attachment; filename=%s' % (
                 self.get_export_filename(file_format_instance),
             )
@@ -461,7 +442,7 @@ class ExportMixin(ImportExportMixinBase):
         return HttpResponseRedirect(url)
 
     def add_successful_export_message(self, request):
-        success_message = _("Data export in process. When it's done, you will get an email with a url where you can download the results.")
+        success_message = _("Data export in progress. When it's done, you will get an email with a url where you can download the results.")
         messages.success(request, success_message)
 
     def export_action(self, request, *args, **kwargs):
@@ -473,7 +454,7 @@ class ExportMixin(ImportExportMixinBase):
             ]
 
             queryset = self.get_export_queryset(request)
-            response = self.handle_export(file_format, queryset, request)
+            response = self.handle_export(file_format, queryset, request=request)
 
             post_export.send(sender=None, model=self.model)
             return response
@@ -540,7 +521,7 @@ class ExportActionModelAdmin(ExportMixin, admin.ModelAdmin):
             formats = self.get_export_formats()
             file_format = formats[int(export_format)]
 
-            response = self.handle_export(file_format, queryset, request)
+            response = self.handle_export(file_format, queryset, request=request)
             return response
     export_admin_action.short_description = _(
         'Export selected %(verbose_name_plural)s')
